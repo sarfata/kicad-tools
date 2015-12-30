@@ -43,9 +43,12 @@ specs = {
 
 def main():
     parser = argparse.ArgumentParser(description = 'Check and fix some board design errors')
-    parser.add_argument('--via-annular-ring', type=int, help='Minimum via annular ring in mils')
-    parser.add_argument('--via-drill-width', type=int, help='Minimum drill width in mils')
-    parser.add_argument('--trace-width', type=int, help='Minimum trace width in mils')
+    parser.add_argument('--via-annular-ring', type=float, help='Minimum via annular ring in mils')
+    parser.add_argument('--via-drill-width', type=float, help='Minimum drill width in mils')
+    parser.add_argument('--trace-width', type=float, help='Minimum trace width in mils')
+    parser.add_argument('--text-thickness', type=float, help='Minimum text thickness (in MM)')
+    parser.add_argument('--text-width', type=float, help='Minimum text width (in MM)')
+    parser.add_argument('--text-height', type=float, help='Minimum text height (in MM)')
     parser.add_argument('--fix', action='store_true', help='Try to automatically fix errors (you WILL need to edit the board afterwards!')
     parser.add_argument('--debug', action='store_true', help='Show more debug information')
     parser.add_argument('--spec', action='append', help='Test compliance to a spec. Use --spec-list to get the list of supported specs.')
@@ -77,6 +80,12 @@ def main():
         runner.addChecker(AnnularRingChecker(args.via_annular_ring))
     if args.trace_width:
         runner.addChecker(TraceWidthChecker(args.trace_width))
+    if args.text_thickness or args.text_width or args.text_height:
+        if args.text_width is None:
+            args.text_width = 4 * args.text_thickness
+        if args.text_height is None:
+            args.text_height = 4 * args.text_thickness
+        runner.addChecker(TextChecker(args.text_thickness, args.text_width, args.text_height))
 
     runner.run()
 
@@ -115,10 +124,35 @@ class PCBRunner(object):
             logging.info("Running {}".format(checker))
             errors = 0
 
-            for item in self.pcb.GetTracks():
+            modules = 0
+            pads = 0
+            text_modules = 0
+            for item in self.pcb.GetModules():
+                modules = modules + 1
                 if not self.process(checker, item):
                     errors = errors + 1
-            logging.info("Found {} errors".format(errors))
+                # Process the pads of the module
+                for pad in item.Pads():
+                    pads = pads + 1
+                    if not self.process(checker, pad):
+                        errors = errors + 1
+                # Inspect the Reference and the Value "TEXTE_MODULE"
+                for text in [ item.Reference(), item.Value() ]:
+                    text_modules = text_modules + 1
+                    if not self.process(checker, text):
+                        errors = errors + 1
+
+            drawings = 0
+            for item in self.pcb.GetDrawings():
+                drawings = drawings + 1
+                if not self.process(checker, item):
+                    errors = errors + 1
+            tracks = 0
+            for item in self.pcb.GetTracks():
+                tracks = tracks + 1
+                if not self.process(checker, item):
+                    errors = errors + 1
+            logging.info("Found {} errors in {} modules, {} pads, {} text (ref/value), {} drawings, {} tracks inspected.".format(errors, modules, pads, text_modules, drawings, tracks))
             self.totalErrors = self.totalErrors + errors
 
         return self.totalErrors
@@ -180,6 +214,34 @@ class TraceWidthChecker(object):
         if type(item) is TRACK:
             item.SetWidth(FromMils(self.minimumTraceWidth))
 
+class TextChecker(object):
+    def __init__(self, m, w, h):
+        self.minimumTextThickness = m
+        self.minimumTextWidth = w
+        self.minimumTextHeight = h
+
+    def check(self, item):
+        if type(item) is TEXTE_MODULE or type(item) is TEXTE_PCB or type(item) is EDA_TEXT:
+            thickness = ToMM(item.GetThickness())
+            width = ToMM(item.GetWidth())
+            height = ToMM(item.GetHeight())
+            if thickness < self.minimumTextThickness or width < self.minimumTextWidth or height < self.minimumTextHeight:
+                logging.debug("Text '{}' thickness/width/height are only {}/{}/{} mm".format(item.GetText(), thickness, width, height))
+                return False
+        return True
+
+    def fix(self, item):
+        if type(item) is TEXTE_MODULE or type(item) is TEXTE_PCB or type(item) is EDA_TEXT:
+            thickness = ToMM(item.GetThickness())
+            width = ToMM(item.GetWidth())
+            height = ToMM(item.GetHeight())
+
+            if thickness < self.minimumTextThickness:
+                item.SetThickness(FromMM(self.minimumTextThickness))
+            if width < self.minimumTextWidth:
+                item.SetWidth(FromMM(self.minimumTextWidth))
+            if height < self.minimumTextHeight:
+                item.SetHeight(FromMM(self.minimumTextHeight))
 
 if __name__ == '__main__':
     main()
